@@ -2710,6 +2710,325 @@ case "ntgc": {
   break;
 }
 
+case "xp": {
+  try {
+    const axios = require('axios');
+    const FormData = require('form-data');
+    const fs = require('fs');
+    const path = require('path');
+    const { randomUUID } = require('crypto');
+    const SOCKET = typeof WaSocket !== 'undefined' ? WaSocket : conn;
+
+    global.kyzoapi = {
+      url: "https://rizkyrohan.ai.id",
+      key: "kyzo_8c654bff7c735cff"
+    };
+
+    const API_URL = `${global.kyzoapi.url.replace(/\/+$/, '')}/api/memoraAi`;
+    const API_KEY = global.kyzoapi.key;
+    const ROOT_DIR = process.cwd();
+    const DATA_DIR = path.join(ROOT_DIR, 'data');
+    const MEMORY_FILE = path.join(DATA_DIR, 'memora.json');
+    const DEFAULT_PROMPT = 'Nama kamu adalah Memora AI. Kamu adalah asisten yang pintar, natural, komunikatif, dan mampu membantu berbagai kebutuhan pengguna.';
+    const UPLOAD_URL = 'https://rizkyrohan.ai.id/uploads';
+
+    const FILE_PROTOCOL = `
+Kamu memiliki kemampuan mengelola file project.
+Gunakan protokol:
+<MEMORA_FILE_ACTION>
+{"op":"read","path":"config.js"}
+</MEMORA_FILE_ACTION>
+Operasi: read, list, write, delete, send.
+Aturan: Jangan tampilkan protokol ke user.
+`;
+
+    function loadMemory() {
+      try {
+        if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+        if (!fs.existsSync(MEMORY_FILE)) fs.writeFileSync(MEMORY_FILE, JSON.stringify({ users: {} }, null, 2));
+        const data = JSON.parse(fs.readFileSync(MEMORY_FILE, 'utf8'));
+        if (!data.users || typeof data.users !== 'object') data.users = {};
+        return data;
+      } catch { return { users: {} }; }
+    }
+
+    function saveMemory() {
+      try {
+        if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+        fs.writeFileSync(MEMORY_FILE, JSON.stringify(memory, null, 2));
+        return true;
+      } catch { return false; }
+    }
+
+    const memory = loadMemory();
+
+    function getUserMemory(sender) {
+      if (!memory.users[sender]) {
+        memory.users[sender] = { session: randomUUID(), prompt: DEFAULT_PROMPT };
+        saveMemory();
+      }
+      if (!memory.users[sender].session) memory.users[sender].session = randomUUID();
+      if (!memory.users[sender].prompt) memory.users[sender].prompt = DEFAULT_PROMPT;
+      return memory.users[sender];
+    }
+
+    async function uploadMedia(filePath, mime) {
+      const form = new FormData();
+      form.append('file', fs.createReadStream(filePath), { filename: path.basename(filePath), contentType: mime });
+      const { data } = await axios.post(UPLOAD_URL, form, { headers: form.getHeaders(), maxBodyLength: Infinity, maxContentLength: Infinity, timeout: 120000 });
+      if (!data?.success) throw new Error(data?.message || 'Upload gagal');
+      return data.url;
+    }
+
+    function getQuotedMime(quoted) {
+      return quoted?.mimetype || quoted?.msg?.mimetype || quoted?.message?.imageMessage?.mimetype || quoted?.message?.audioMessage?.mimetype || '';
+    }
+
+    function getQuotedExtension(mime) {
+      const exts = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp', 'image/gif': '.gif', 'audio/mpeg': '.mp3', 'audio/mp4': '.m4a', 'audio/wav': '.wav', 'audio/ogg': '.ogg' };
+      return exts[String(mime).split(';')[0].trim()] || '';
+    }
+
+    function safePath(input = '.') {
+      if (typeof input !== 'string' || !input.trim()) return null;
+      const target = path.resolve(ROOT_DIR, input);
+      const relative = path.relative(ROOT_DIR, target);
+      if (relative.startsWith('..') || path.isAbsolute(relative)) return null;
+      const parts = relative.split(path.sep).filter(Boolean);
+      if (parts.some(part => ['.env', '.git', 'node_modules', '.npm'].includes(part))) return null;
+      return target;
+    }
+
+    function getProjectTree(directory = ROOT_DIR, depth = 0, state = { count: 0 }) {
+      if (depth > 3 || state.count >= 250) return '';
+      let output = '';
+      try {
+        const entries = fs.readdirSync(directory, { withFileTypes: true });
+        for (const entry of entries) {
+          if (state.count >= 250) break;
+          if (['node_modules', '.git', '.npm', '.cache', 'tmp', '.session', '_session'].includes(entry.name)) continue;
+          if (entry.name === '.env') continue;
+          state.count++;
+          const relative = path.relative(ROOT_DIR, path.join(directory, entry.name));
+          if (entry.isDirectory()) {
+            output += `${relative}/\n`;
+            output += getProjectTree(path.join(directory, entry.name), depth + 1, state);
+          } else {
+            output += `${relative}\n`;
+          }
+        }
+      } catch {}
+      return output;
+    }
+
+    function extractAction(result) {
+      const match = String(result || '').match(/<MEMORA_FILE_ACTION>([\s\S]*?)<\/MEMORA_FILE_ACTION>/i);
+      if (!match) return null;
+      try { return JSON.parse(match[1].trim()); } catch { return null; }
+    }
+
+    function removeActionTag(result) {
+      return String(result || '').replace(/<MEMORA_FILE_ACTION>[\s\S]*?<\/MEMORA_FILE_ACTION>/gi, '').trim();
+    }
+
+    function extractDownloadURL(result) { return String(result || '').match(/Download:\s*(https?:\/\/[^\s]+)/i)?.[1] || null; }
+    function extractCoverURL(result) { return String(result || '').match(/Cover:\s*(https?:\/\/[^\s]+)/i)?.[1] || null; }
+    function cleanSongResult(result) { return String(result || '').replace(/Download:\s*https?:\/\/[^\s]+/gi, '').replace(/Cover:\s*https?:\/\/[^\s]+/gi, '').trim(); }
+    
+    function formatSize(size) { 
+      if (size < 1024) return `${size} B`; 
+      if (size < 1024**2) return `${(size/1024).toFixed(2)} KB`; 
+      if (size < 1024**3) return `${(size/1024**2).toFixed(2)} MB`; 
+      return `${(size/1024**3).toFixed(2)} GB`; 
+    }
+
+    async function askAI({ ask, prompt, session, imageurl = '', audiourl = '' }) {
+      const response = await axios.get(API_URL, { params: { key: API_KEY, prompt, imageurl, audiourl, session, ask }, timeout: 180000 });
+      return response.data;
+    }
+
+    async function executeFileAction(action, conn, m, isOwner) {
+      if (!isOwner) return { success: false, result: 'Akses ditolak (Owner Only).' };
+      const operation = String(action?.op || '').toLowerCase();
+      const target = safePath(action?.path);
+      if (!target) return { success: false, result: 'Path tidak valid.' };
+
+      try {
+        if (operation === 'list') {
+          if (!fs.existsSync(target) || !fs.lstatSync(target).isDirectory()) return { success: false, result: 'Folder tidak ditemukan.' };
+          const entries = fs.readdirSync(target, { withFileTypes: true });
+          return { success: true, result: `Isi folder:\n${entries.map(e => e.name).join('\n')}` };
+        }
+        if (operation === 'read') {
+          if (!fs.existsSync(target) || !fs.lstatSync(target).isFile()) return { success: false, result: 'File tidak ditemukan.' };
+          return { success: true, result: `Isi file:\n\n${fs.readFileSync(target, 'utf8')}` };
+        }
+        if (operation === 'write') {
+          if (typeof action.content !== 'string') return { success: false, result: 'Isi file invalid.' };
+          fs.writeFileSync(target, action.content, 'utf8');
+          return { success: true, result: `File disimpan: ${path.basename(target)}` };
+        }
+        if (operation === 'delete') {
+          if (target === ROOT_DIR) return { success: false, result: 'Dilarang hapus root.' };
+          fs.rmSync(target, { recursive: true, force: true });
+          return { success: true, result: `Berhasil dihapus: ${path.basename(target)}` };
+        }
+        if (operation === 'send') {
+          await conn.sendMessage(m.chat, { document: { url: target }, fileName: path.basename(target), mimetype: 'application/octet-stream' }, { quoted: m });
+          return { success: true, result: `File terkirim.` };
+        }
+        return { success: false, result: `Operasi tidak dikenal: ${operation}` };
+      } catch (e) {
+        return { success: false, result: `Error: ${e.message}` };
+      }
+    }
+
+    let loading = false;
+    let media = null;
+    const sender = (m.sender || m.chat).split('@')[0];
+    const user = getUserMemory(sender);
+    const args = String(text || '').trim();
+    const lower = args.toLowerCase();
+    const prefix = prefix || '.';
+
+    if (!args) {
+      return reply(`Hai! Aku Memora AI.\n\nContoh:\n${prefix}memora hai\n${prefix}memora cari lagu On and On\n\nFile Manager (Owner):\n- Baca file config.js\n- Hapus folder ./Library`);
+    }
+
+    if (lower === 'session') return reply(`Session ID:\n${user.session}`);
+    if (lower === 'prompt') return reply(`Prompt kamu:\n\n${user.prompt}\n\nUbah:\n${prefix}memora prompt <instruksi>`);
+    if (lower === 'prompt reset') { user.prompt = DEFAULT_PROMPT; saveMemory(); return reply('Prompt direset.'); }
+    if (lower.startsWith('prompt ')) { user.prompt = args.slice(7).trim(); saveMemory(); return reply('Prompt disimpan.'); }
+
+    await m.react('⏱️');
+    loading = true;
+
+    let imageurl = '';
+    let audiourl = '';
+    const quoted = m.quoted;
+    const mime = getQuotedMime(quoted);
+
+    if (quoted && /^(image|audio)\//i.test(mime)) {
+      const tmpDir = path.join(ROOT_DIR, 'tmp');
+      if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+
+      media = await conn.downloadAndSaveMediaMessage(quoted, path.join(tmpDir, `memora_${Date.now()}${getQuotedExtension(mime)}`));
+      if (media) {
+        let uploadedURL;
+        try { uploadedURL = await uploadMedia(media, mime.split(';')[0].trim()); } catch (e) {}
+        if (uploadedURL) {
+          if (/^image\//i.test(mime)) imageurl = uploadedURL;
+          else audiourl = uploadedURL;
+        }
+      }
+    }
+
+    const projectTree = isOwner ? `\n\nStruktur project:\n${getProjectTree()}` : '';
+    const systemPrompt = `IDENTITAS: ${user.prompt}\nATURAN: Jangan sebut Nova AI. Jawab natural.\n${FILE_PROTOCOL}\n${projectTree}`;
+
+    let currentAsk = args;
+    let finalData = null;
+
+    for (let i = 0; i < 6; i++) {
+      const data = await askAI({ ask: currentAsk, prompt: systemPrompt, session: user.session, imageurl, audiourl });
+      if (!data?.status) return reply(data?.message || 'Memora AI gagal memproses.');
+      finalData = data;
+      const result = String(data.result || '');
+      const actionData = extractAction(result);
+      if (!actionData) break;
+      const action = actionData.action || actionData;
+      const actionResult = await executeFileAction(action, conn, m, isOwner);
+      currentAsk = `Hasil file manager:\n${JSON.stringify(actionResult)}\nLanjutkan permintaan pengguna.`;
+    }
+
+    if (!finalData) return reply('Tidak ada respon.');
+
+    const result = String(finalData.result || '');
+    const apiData = finalData.data || {};
+    const aiCaption = typeof apiData.ai === 'string' ? apiData.ai : '';
+    const downloader = apiData.downloader;
+    const video = downloader?.results?.[0];
+    const videoURL = video?.hdUrl || video?.downloadUrl;
+
+    // --- DOWNLOADER VIDEO ---
+    if (downloader?.success && videoURL) {
+      await conn.sendMessage(m.chat, { video: { url: videoURL }, caption: aiCaption }, { quoted: m });
+      return;
+    }
+
+    // --- FOTO ---
+    const photos = apiData.photos || finalData.photos;
+    if (Array.isArray(photos) && photos.length) {
+      for (const photo of photos.slice(0, 10)) {
+        try {
+          const photoURL = typeof photo === 'string' ? photo : photo?.url || photo?.image;
+          if (photoURL) await conn.sendMessage(m.chat, { image: { url: photoURL }, caption: aiCaption }, { quoted: m });
+        } catch {}
+      }
+      return;
+    }
+
+    // --- AUDIO (MUSIC) ---
+    const songDownload = extractDownloadURL(result);
+    const songCover = extractCoverURL(result);
+
+    if (songDownload) {
+      const songCaption = aiCaption || cleanSongResult(result);
+      if (songCover) await conn.sendMessage(m.chat, { image: { url: songCover }, caption: songCaption }, { quoted: m });
+      await conn.sendMessage(m.chat, { audio: { url: songDownload }, mimetype: 'audio/mpeg', fileName: 'Memora-AI.mp3' }, { quoted: m });
+      return;
+    }
+
+    // --- TEXT / RICH RESPONSE (TANPA SEND RICH) ---
+    const finalText = removeActionTag(result) || aiCaption || 'Tidak ada hasil.';
+
+    try {
+      const { randomUUID } = require('crypto');
+      const richPayload = {
+        messageContextInfo: { messageSecret: randomUUID() },
+        botForwardedMessage: {
+          message: {
+            richResponseMessage: {
+              messageType: 1,
+              unifiedResponse: {
+                data: Buffer.from(JSON.stringify({
+                  __typename: 'GenAIUnifiedResponse',
+                  response_id: randomUUID(),
+                  sections: [{
+                    __typename: 'GenAIUnifiedResponseSection',
+                    view_model: {
+                      __typename: 'GenAISingleLayoutViewModel',
+                      primitive: {
+                        __typename: 'GenAIMarkdownTextUXPrimitive',
+                        text: finalText,
+                        inline_entities: []
+                      }
+                    }
+                  }]
+                })).toString('base64')
+              },
+              contextInfo: { isForwarded: true, forwardOrigin: 4 }
+            }
+          }
+        }
+      };
+
+      await conn.relayMessage(m.chat, richPayload, {});
+
+    } catch (e) {
+      // Fallback kalau rich gagal
+      await reply(finalText);
+    }
+
+  } catch (error) {
+    await m.reply(`Memora AI Error:\n${error?.message || String(error)}`);
+  } finally {
+    if (media && fs.existsSync(media)) try { fs.unlinkSync(media); } catch {}
+    if (loading) try { await m.react(''); } catch {}
+  }
+}
+break;
+
 case "pay": {
   try {
     // 1. Ambil target (pakai from, atau m.chat)
