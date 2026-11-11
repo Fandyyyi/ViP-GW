@@ -1,0 +1,29 @@
+[
+  {
+    "id": 1,
+    "name": "Bot WhatsApp Premium",
+    "price": "Rp 50.000",
+    "description": "Bot WhatsApp dengan fitur lengkap dan canggih",
+    "stock": "Tersedia",
+    "image": "https://files.catbox.moe/5yvu6y.jpg",
+    "url": "https://wa.me/6283164371859?text=Halo%20saya%20mau%20beli%20Bot%20Premium"
+  },
+  {
+    "id": 2,
+    "name": "Script Bot WhatsApp",
+    "price": "Rp 150.000",
+    "description": "Script bot siap pakai + source code lengkap",
+    "stock": "Tersedia",
+    "image": "https://files.catbox.moe/ehzcce.png",
+    "url": "https://wa.me/6283164371859?text=Halo%20saya%20mau%20beli%20Script%20Bot"
+  },
+  {
+    "id": 3,
+    "name": "Jasa Install Bot",
+    "price": "Rp 25.000",
+    "description": "Jasa install & setup bot WhatsApp di server",
+    "stock": "Tersedia",
+    "image": "https://files.catbox.moe/m470r5.jpg",
+    "url": "https://wa.me/6283164371859?text=Halo%20saya%20mau%20jasa%20install%20bot"
+  }
+]
